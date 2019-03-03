@@ -5,7 +5,9 @@
 
 //default 9.6MHz / 8 = 1200000 or at 4.8MHz / 8 = 600000
 //use 1.2MHz then 150000
-#define F_CPU 150000UL
+#ifndef F_CPU
+	#define F_CPU 1200000
+#endif
 
 // ATtiny13 candle with long sleep mode, wake watchdog timer
 // microCore: https://github.com/MCUdude/MicroCore
@@ -54,16 +56,28 @@
               +--------+
 */
 
-
+#include <avr/interrupt.h>
 #include <avr/sleep.h>    // Sleep Modes
 #include <avr/power.h>    // Power management
 #include <avr/wdt.h>      // Watchdog timer
+#include <avr/io.h>
+#include <util/delay.h>
+
+#ifdef USE_I2C
+    #include "./i2c/i2c.h"
+#else
+    #include "./i2cmaster/i2cmaster.h"
+#endif
 
 #ifndef WDIF
   #define WDIF WDTIF
 #endif
 #ifndef WDIE
   #define WDIE WDTIE
+#endif
+#ifndef bit
+    #define bit(b) (1UL << (b))
+    //#define _BV(b) (1UL << (b))
 #endif
 
 #define USE_HEART_BEAT_LED
@@ -87,9 +101,9 @@ volatile uint8_t  on_hours=0;
 volatile uint8_t  off_hours=0;
 volatile uint8_t bLedIsOn=1; //we start in ON mode
 
-const byte LED = 3;  // pin 2
+#define LED 3 //;  // pin 2, PB3
 #ifdef USE_HEART_BEAT_LED
-const byte LED2 = 4; // pin 3 for heart beat LED
+#define LED2 4 //; // pin 3 for heart beat LED, PB4
 #endif
 
 //for candle simulation via pwm
@@ -124,9 +138,11 @@ ISR (WDT_vect)
 
 #ifdef USE_HEART_BEAT_LED  
   //flash heart beat LED
-  digitalWrite(LED2, HIGH);
-  delay(1);
-  digitalWrite(LED2, LOW);
+  //turns B0 HIGH
+  PORTB |=(1<<LED2);//  digitalWrite(LED2, HIGH);
+  _delay_ms(1);
+  //turns LED2 LOW
+  PORTB &= ~(1 << LED2);//  digitalWrite(LED2, LOW);
 #endif
   
   if(sec8_counter>=HOUR_INTERVAL){
@@ -148,7 +164,7 @@ ISR (WDT_vect)
   wdt_reset();
 }  // end of WDT_vect
 
-void resetWatchdog ()
+void resetWatchdog (void)
 {
   // clear various "reset" flags
   MCUSR = 0;    
@@ -163,46 +179,32 @@ void resetWatchdog ()
  
 
  
-void goToSleep ()
+void goToSleep(void)
 {
   set_sleep_mode (SLEEP_MODE_PWR_DOWN);
   ADCSRA = 0;            // turn off ADC
   power_all_disable ();  // power off ADC, Timer 0 and 1, serial interface
-  //set all unused ports to output
+  //set all unused ports to output, uses another 8 bytes
+/*  
   pinMode(0, OUTPUT);
   pinMode(1, OUTPUT);
   pinMode(2, OUTPUT);
   PORTB = 0b000000; //all low
-  noInterrupts ();       // timed sequence coming up
+*/
+  cli(); //noInterrupts ();       // timed sequence coming up
   resetWatchdog ();      // get watchdog ready
   sleep_enable ();       // ready to sleep
-  interrupts ();         // interrupts are required now
+  sei(); //interrupts ();         // interrupts are required now
   sleep_cpu ();        // sleep                
   sleep_disable ();      // precaution
-  power_all_enable ();   // power everything back on
+  power_all_enable();//power_all_enable ();   // power everything back on
 }  // end of goToSleep
 
 
 
-void setup ()
-{
-  resetWatchdog ();  // do this first in case WDT fires
-
-  CLKPR=_BV(CLKPCE);
-  CLKPR=0;      // Set clk division factor to 1
-  
-  pinMode (LED, OUTPUT);
-  #ifdef USE_HEART_BEAT_LED
-  pinMode (LED2, OUTPUT);
-  digitalWrite(LED2, LOW);
-  #endif
-  //disable BOD
-//  MCUCR |= _BV(BODS) | _BV(BODSE);
-}  // end of setup
-
-
 //mimic candle: https://github.com/cpldcpu/CandleLEDhack/blob/master/Emulator/CandeflickerLED.c
-void doCandle(){
+void doCandle(void)
+{
 if(F_CPU==150000){
   _delay_us(1e6/440/16*8);
 }else{
@@ -213,9 +215,11 @@ if(F_CPU==150000){
   PWM_CTR&=0xf;   // only 4 bit
   
   if (PWM_CTR<=PWM_VAL) {
-     digitalWrite (LED, HIGH);
+      //turns B0 HIGH
+     PORTB |=(1<<LED);//digitalWrite (LED, HIGH);
   } else {
-     digitalWrite (LED, LOW);
+    //turns B3 LOW
+    PORTB &= ~(1 << LED);//digitalWrite (LED, LOW);
   }
   // FRAME
   if (PWM_CTR==0) 
@@ -225,10 +229,14 @@ if(F_CPU==150000){
     
     if ((FRAME_CTR&0x07)==0)  // generate a new random number every 8 cycles. In reality this is most likely bit serial
     {
-      RAND=Rand()&0x1f;         
-      if ((RAND&0x0c)!=0) randflag=1; else randflag=0;// only update if valid         
+      RAND=Rand()&0x1f;
+      randflag=((RAND&0x0c)!=0); //optimized, saves 14 bytes!         
+/*      if ((RAND&0x0c)!=0) 
+        randflag=1; 
+      else 
+        randflag=0;// only update if valid         
+*/    
     }
-    
     // NEW FRAME            
     if (FRAME_CTR==0)
     {
@@ -243,16 +251,57 @@ if(F_CPU==150000){
   }
 }//end doCandle
 
-void loop ()
+void setup (void)
+{
+  resetWatchdog ();  // do this first in case WDT fires
+
+  CLKPR=_BV(CLKPCE);
+  CLKPR=0;      // Set clk division factor to 1
+  
+  //Set PORTB to all outputs
+  DDRB = 0xFF;
+/*
+  pinMode (LED, OUTPUT);
+  #ifdef USE_HEART_BEAT_LED
+  pinMode (LED2, OUTPUT);
+*/
+
+  //turns B0 HIGH
+  //PORTB |=(1<<0);
+  //turns B3 LOW
+  PORTB &= ~(1 << LED);
+#ifdef USE_HEART_BEAT_LED
+  //turns B4 LOW
+  PORTB &= ~(1 << LED2);//  digitalWrite(LED2, LOW);
+  #endif
+  //disable BOD
+//  MCUCR |= _BV(BODS) | _BV(BODSE);
+#ifdef USE_I2C
+    I2C_Init(); //i2c.h
+#else
+    i2c_init(); //i2cmasher.h
+#endif
+}  // end of setup
+
+void loop (void)
 {
   //sleep 20 hours and work 4 hours
-  noInterrupts();
+  cli(); //noInterrupts();
   if(bLedIsOn==1){
     doCandle();
   }else{
-    digitalWrite (LED, LOW); //ensure LED is OFF
+    //turns B3 LOW
+    PORTB &= ~(1 << LED);
+    //digitalWrite (LED, LOW); //ensure LED is OFF
    goToSleep ();
   }
-  interrupts();
+  sei(); //interrupts();
 }  // end of loop
 
+int main(void){
+    setup();
+    while(1) {
+        loop();
+    }
+    return 0;
+}
