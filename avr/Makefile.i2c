@@ -47,6 +47,8 @@ EXT =
 INCLUDE := $(foreach dir, $(EXT), -I$(dir))
 # c flags
 CFLAGS    = -Wall -Os -DF_CPU=$(CLK) -mmcu=$(MCU) $(INCLUDE) -std=gnu99
+CFLAGS += -DUSE_I2C
+
 # any aditional flags for c++
 CPPFLAGS =
 

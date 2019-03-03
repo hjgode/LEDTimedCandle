@@ -1,0 +1,1016 @@
+   1               		.file	"LEDTimedCandle.c"
+   2               	__SP_L__ = 0x3d
+   3               	__SREG__ = 0x3f
+   4               	__tmp_reg__ = 0
+   5               	__zero_reg__ = 1
+   8               		.text
+   9               	.Ltext0:
+ 108               	.global	Rand
+ 110               	Rand:
+ 111               		.stabd	46,0,0
+   1:LEDTimedCandle.c **** //use for debug to speed up cycles
+   2:LEDTimedCandle.c **** //#define MY_DEBUG
+   3:LEDTimedCandle.c **** 
+   4:LEDTimedCandle.c **** //you may need to disable millis in packages/MicroCore/hardware/avr/1.0.4/cores/microcore/core_sett
+   5:LEDTimedCandle.c **** 
+   6:LEDTimedCandle.c **** //default 9.6MHz / 8 = 1200000 or at 4.8MHz / 8 = 600000
+   7:LEDTimedCandle.c **** //use 1.2MHz then 150000
+   8:LEDTimedCandle.c **** #ifndef F_CPU
+   9:LEDTimedCandle.c **** 	#define F_CPU 1200000
+  10:LEDTimedCandle.c **** #endif
+  11:LEDTimedCandle.c **** 
+  12:LEDTimedCandle.c **** // ATtiny13 candle with long sleep mode, wake watchdog timer
+  13:LEDTimedCandle.c **** // microCore: https://github.com/MCUdude/MicroCore
+  14:LEDTimedCandle.c **** // Date: 12 October 2013
+  15:LEDTimedCandle.c **** 
+  16:LEDTimedCandle.c **** // http://forum.arduino.cc/index.php?topic=200590.0
+  17:LEDTimedCandle.c **** // https://electronics.stackexchange.com/questions/74840/use-avr-watchdog-like-normal-isr
+  18:LEDTimedCandle.c **** 
+  19:LEDTimedCandle.c **** // ATMEL ATTINY 13 / ARDUINO
+  20:LEDTimedCandle.c **** //
+  21:LEDTimedCandle.c **** // ######### NOTES ########
+  22:LEDTimedCandle.c **** // disable BOD
+  23:LEDTimedCandle.c **** // set CPU clock to 1.2MHz should run OK with 1.8V
+  24:LEDTimedCandle.c **** // ########################
+  25:LEDTimedCandle.c **** 
+  26:LEDTimedCandle.c **** //                      +-\/-+
+  27:LEDTimedCandle.c **** // RST Ain0 (D 5) PB5  1|    |8  Vcc
+  28:LEDTimedCandle.c **** //     Ain3 (D 3) PB3  2|    |7  PB2 (D 2) Ain1 SCK
+  29:LEDTimedCandle.c **** //     Ain2 (D 4) PB4  3|    |6  PB1 (D 1) pwm1 MISO
+  30:LEDTimedCandle.c **** //                GND  4|    |5  PB0 (D 0) pwm0 MOSI
+  31:LEDTimedCandle.c **** //                      +----+
+  32:LEDTimedCandle.c **** 
+  33:LEDTimedCandle.c **** //                  +-------------+--o VCC
+  34:LEDTimedCandle.c **** //                  |             |
+  35:LEDTimedCandle.c **** //    47k          | |            |    
+  36:LEDTimedCandle.c **** //                 | |            |
+  37:LEDTimedCandle.c **** //                  |   +-\/-+    |
+  38:LEDTimedCandle.c **** //             LED  +--1|    |8---+
+  39:LEDTimedCandle.c **** //    LED    +--|<-----2|    |7   |                
+  40:LEDTimedCandle.c **** //           |         3|    |6   |
+  41:LEDTimedCandle.c **** //    100   | |    +---4|    |5   |
+  42:LEDTimedCandle.c **** //          | |    |    +----+   ===
+  43:LEDTimedCandle.c **** //           |     |             === 220pF
+  44:LEDTimedCandle.c **** //           |     |              |
+  45:LEDTimedCandle.c **** //          ---   ---            ---
+  46:LEDTimedCandle.c **** //
+  47:LEDTimedCandle.c **** // option: add LED on pin 3 (PB4) for heart beat every WDT interrupt
+  48:LEDTimedCandle.c **** 
+  49:LEDTimedCandle.c **** /* ISP 6pol
+  50:LEDTimedCandle.c ****               +--------+
+  51:LEDTimedCandle.c ****       MISO    |  o  o  |    VTG (VCC)
+  52:LEDTimedCandle.c ****               ++       |
+  53:LEDTimedCandle.c ****       SCK      | o  o  |    MOSI
+  54:LEDTimedCandle.c ****               ++       |
+  55:LEDTimedCandle.c ****       RST     |  o  o  |    GND
+  56:LEDTimedCandle.c ****               +--------+
+  57:LEDTimedCandle.c **** */
+  58:LEDTimedCandle.c **** 
+  59:LEDTimedCandle.c **** #include <avr/interrupt.h>
+  60:LEDTimedCandle.c **** #include <avr/sleep.h>    // Sleep Modes
+  61:LEDTimedCandle.c **** #include <avr/power.h>    // Power management
+  62:LEDTimedCandle.c **** #include <avr/wdt.h>      // Watchdog timer
+  63:LEDTimedCandle.c **** #include <avr/io.h>
+  64:LEDTimedCandle.c **** #include <util/delay.h>
+  65:LEDTimedCandle.c **** 
+  66:LEDTimedCandle.c **** #ifdef USE_I2C
+  67:LEDTimedCandle.c ****     #include "./i2c/i2c.h"
+  68:LEDTimedCandle.c **** #else
+  69:LEDTimedCandle.c ****     #include "./i2cmaster/i2cmaster.h"
+  70:LEDTimedCandle.c **** #endif
+  71:LEDTimedCandle.c **** 
+  72:LEDTimedCandle.c **** #ifndef WDIF
+  73:LEDTimedCandle.c ****   #define WDIF WDTIF
+  74:LEDTimedCandle.c **** #endif
+  75:LEDTimedCandle.c **** #ifndef WDIE
+  76:LEDTimedCandle.c ****   #define WDIE WDTIE
+  77:LEDTimedCandle.c **** #endif
+  78:LEDTimedCandle.c **** #ifndef bit
+  79:LEDTimedCandle.c ****     #define bit(b) (1UL << (b))
+  80:LEDTimedCandle.c ****     //#define _BV(b) (1UL << (b))
+  81:LEDTimedCandle.c **** #endif
+  82:LEDTimedCandle.c **** 
+  83:LEDTimedCandle.c **** #define USE_HEART_BEAT_LED
+  84:LEDTimedCandle.c **** 
+  85:LEDTimedCandle.c **** //for 8seconds 450 times will be one hour
+  86:LEDTimedCandle.c **** //we have two intervals: on-time=4hours; off-time=20 hours
+  87:LEDTimedCandle.c **** volatile uint16_t sec8_counter=0;
+  88:LEDTimedCandle.c **** #ifndef MY_DEBUG
+  89:LEDTimedCandle.c ****   //450x8 = 3600 seconds = 60 minutes
+  90:LEDTimedCandle.c ****   #define HOUR_INTERVAL 450
+  91:LEDTimedCandle.c ****   #define MAX_OFF_HOURS 20
+  92:LEDTimedCandle.c ****   #define MAX_ON_HOURS 4
+  93:LEDTimedCandle.c **** #else
+  94:LEDTimedCandle.c ****   //DEBUG: 1x8 = 8 seconds : ON time = 8x2, OFF time=8*2 seconds
+  95:LEDTimedCandle.c ****   #define HOUR_INTERVAL 1
+  96:LEDTimedCandle.c ****   #define MAX_OFF_HOURS 2
+  97:LEDTimedCandle.c ****   #define MAX_ON_HOURS 2
+  98:LEDTimedCandle.c **** #endif
+  99:LEDTimedCandle.c **** volatile uint8_t  on_hours=0;
+ 100:LEDTimedCandle.c **** 
+ 101:LEDTimedCandle.c **** volatile uint8_t  off_hours=0;
+ 102:LEDTimedCandle.c **** volatile uint8_t bLedIsOn=1; //we start in ON mode
+ 103:LEDTimedCandle.c **** 
+ 104:LEDTimedCandle.c **** #define LED 3 //;  // pin 2, PB3
+ 105:LEDTimedCandle.c **** #ifdef USE_HEART_BEAT_LED
+ 106:LEDTimedCandle.c **** #define LED2 4 //; // pin 3 for heart beat LED, PB4
+ 107:LEDTimedCandle.c **** #endif
+ 108:LEDTimedCandle.c **** 
+ 109:LEDTimedCandle.c **** //for candle simulation via pwm
+ 110:LEDTimedCandle.c **** uint8_t PWM_CTR=0;    // 4 bit-Counter
+ 111:LEDTimedCandle.c **** uint8_t FRAME_CTR=0;  // 5 bit-Counter
+ 112:LEDTimedCandle.c **** 
+ 113:LEDTimedCandle.c **** uint8_t PWM_VAL=0;    // 4 bit-Register
+ 114:LEDTimedCandle.c **** uint8_t NEXTBRIGHT=0; // 4 bit-Register
+ 115:LEDTimedCandle.c **** uint8_t RAND=0;     // 5 bit Signal
+ 116:LEDTimedCandle.c **** uint8_t randflag=0;   // 1 bit Signal
+ 117:LEDTimedCandle.c **** 
+ 118:LEDTimedCandle.c **** /*
+ 119:LEDTimedCandle.c ****   32 Bit maximum length LFSR
+ 120:LEDTimedCandle.c ****   see http://www.ece.cmu.edu/~koopman/lfsr/index.html
+ 121:LEDTimedCandle.c ****   
+ 122:LEDTimedCandle.c ****   Using inverted values so the LFSR also works with zero initialisiation.
+ 123:LEDTimedCandle.c ****   
+ 124:LEDTimedCandle.c **** */
+ 125:LEDTimedCandle.c **** uint8_t Rand(void) {
+ 113               	.LM0:
+ 114               	.LFBB1:
+ 115               	/* prologue: function */
+ 116               	/* frame size = 0 */
+ 117               	/* stack size = 0 */
+ 118               	.L__stack_usage = 0
+ 126:LEDTimedCandle.c ****   static uint32_t Z;
+ 127:LEDTimedCandle.c ****   
+ 128:LEDTimedCandle.c ****     if (Z & 1)  { Z = (Z >> 1); }
+ 120               	.LM1:
+ 121 0000 4091 0000 		lds r20,Z.1636
+ 122 0004 5091 0000 		lds r21,Z.1636+1
+ 123 0008 6091 0000 		lds r22,Z.1636+2
+ 124 000c 7091 0000 		lds r23,Z.1636+3
+ 125 0010 DB01      		movw r26,r22
+ 126 0012 CA01      		movw r24,r20
+ 127 0014 B695      		lsr r27
+ 128 0016 A795      		ror r26
+ 129 0018 9795      		ror r25
+ 130 001a 8795      		ror r24
+ 131 001c 40FD      		sbrc r20,0
+ 132 001e 00C0      		rjmp .L4
+ 129:LEDTimedCandle.c ****     else        { Z = (Z >> 1) ^ 0x7FFFF159; }
+ 134               	.LM2:
+ 135 0020 29E5      		ldi r18,89
+ 136 0022 8227      		eor r24,r18
+ 137 0024 21EF      		ldi r18,241
+ 138 0026 9227      		eor r25,r18
+ 139 0028 A095      		com r26
+ 140 002a 2FE7      		ldi r18,127
+ 141 002c B227      		eor r27,r18
+ 142               	.L4:
+ 143 002e 8093 0000 		sts Z.1636,r24
+ 144 0032 9093 0000 		sts Z.1636+1,r25
+ 145 0036 A093 0000 		sts Z.1636+2,r26
+ 146 003a B093 0000 		sts Z.1636+3,r27
+ 130:LEDTimedCandle.c ****   
+ 131:LEDTimedCandle.c ****   return (uint8_t)Z;
+ 132:LEDTimedCandle.c **** }
+ 148               	.LM3:
+ 149 003e 8091 0000 		lds r24,Z.1636
+ 150 0042 0895      		ret
+ 155               	.Lscope1:
+ 157               		.stabd	78,0,0
+ 159               	.global	__vector_8
+ 161               	__vector_8:
+ 162               		.stabd	46,0,0
+ 133:LEDTimedCandle.c **** 
+ 134:LEDTimedCandle.c **** // watchdog interrupt
+ 135:LEDTimedCandle.c **** ISR (WDT_vect)
+ 136:LEDTimedCandle.c **** {
+ 164               	.LM4:
+ 165               	.LFBB2:
+ 166 0044 1F92      		push r1
+ 167 0046 0F92      		push r0
+ 168 0048 0FB6      		in r0,__SREG__
+ 169 004a 0F92      		push r0
+ 170 004c 1124      		clr __zero_reg__
+ 171 004e 2F93      		push r18
+ 172 0050 8F93      		push r24
+ 173 0052 9F93      		push r25
+ 174               	/* prologue: Signal */
+ 175               	/* frame size = 0 */
+ 176               	/* stack size = 6 */
+ 177               	.L__stack_usage = 6
+ 137:LEDTimedCandle.c ****   sec8_counter++;
+ 179               	.LM5:
+ 180 0054 8091 0000 		lds r24,sec8_counter
+ 181 0058 9091 0000 		lds r25,sec8_counter+1
+ 182 005c 0196      		adiw r24,1
+ 183 005e 9093 0000 		sts sec8_counter+1,r25
+ 184 0062 8093 0000 		sts sec8_counter,r24
+ 138:LEDTimedCandle.c **** 
+ 139:LEDTimedCandle.c **** #ifdef USE_HEART_BEAT_LED  
+ 140:LEDTimedCandle.c ****   //flash heart beat LED
+ 141:LEDTimedCandle.c ****   //turns B0 HIGH
+ 142:LEDTimedCandle.c ****   PORTB |=(1<<LED2);//  digitalWrite(LED2, HIGH);
+ 186               	.LM6:
+ 187 0066 C49A      		sbi 0x18,4
+ 188               	.LBB6:
+ 189               	.LBB7:
+ 191               	.Ltext1:
+   1:/usr/lib/avr/include/util/delay.h **** /* Copyright (c) 2002, Marek Michalkiewicz
+   2:/usr/lib/avr/include/util/delay.h ****    Copyright (c) 2004,2005,2007 Joerg Wunsch
+   3:/usr/lib/avr/include/util/delay.h ****    Copyright (c) 2007  Florin-Viorel Petrov
+   4:/usr/lib/avr/include/util/delay.h ****    All rights reserved.
+   5:/usr/lib/avr/include/util/delay.h **** 
+   6:/usr/lib/avr/include/util/delay.h ****    Redistribution and use in source and binary forms, with or without
+   7:/usr/lib/avr/include/util/delay.h ****    modification, are permitted provided that the following conditions are met:
+   8:/usr/lib/avr/include/util/delay.h **** 
+   9:/usr/lib/avr/include/util/delay.h ****    * Redistributions of source code must retain the above copyright
+  10:/usr/lib/avr/include/util/delay.h ****      notice, this list of conditions and the following disclaimer.
+  11:/usr/lib/avr/include/util/delay.h **** 
+  12:/usr/lib/avr/include/util/delay.h ****    * Redistributions in binary form must reproduce the above copyright
+  13:/usr/lib/avr/include/util/delay.h ****      notice, this list of conditions and the following disclaimer in
+  14:/usr/lib/avr/include/util/delay.h ****      the documentation and/or other materials provided with the
+  15:/usr/lib/avr/include/util/delay.h ****      distribution.
+  16:/usr/lib/avr/include/util/delay.h **** 
+  17:/usr/lib/avr/include/util/delay.h ****    * Neither the name of the copyright holders nor the names of
+  18:/usr/lib/avr/include/util/delay.h ****      contributors may be used to endorse or promote products derived
+  19:/usr/lib/avr/include/util/delay.h ****      from this software without specific prior written permission.
+  20:/usr/lib/avr/include/util/delay.h **** 
+  21:/usr/lib/avr/include/util/delay.h ****   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+  22:/usr/lib/avr/include/util/delay.h ****   AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+  23:/usr/lib/avr/include/util/delay.h ****   IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+  24:/usr/lib/avr/include/util/delay.h ****   ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+  25:/usr/lib/avr/include/util/delay.h ****   LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+  26:/usr/lib/avr/include/util/delay.h ****   CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+  27:/usr/lib/avr/include/util/delay.h ****   SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+  28:/usr/lib/avr/include/util/delay.h ****   INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+  29:/usr/lib/avr/include/util/delay.h ****   CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+  30:/usr/lib/avr/include/util/delay.h ****   ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+  31:/usr/lib/avr/include/util/delay.h ****   POSSIBILITY OF SUCH DAMAGE. */
+  32:/usr/lib/avr/include/util/delay.h **** 
+  33:/usr/lib/avr/include/util/delay.h **** /* $Id$ */
+  34:/usr/lib/avr/include/util/delay.h **** 
+  35:/usr/lib/avr/include/util/delay.h **** #ifndef _UTIL_DELAY_H_
+  36:/usr/lib/avr/include/util/delay.h **** #define _UTIL_DELAY_H_ 1
+  37:/usr/lib/avr/include/util/delay.h **** 
+  38:/usr/lib/avr/include/util/delay.h **** #ifndef __HAS_DELAY_CYCLES
+  39:/usr/lib/avr/include/util/delay.h **** #define __HAS_DELAY_CYCLES 1
+  40:/usr/lib/avr/include/util/delay.h **** #endif
+  41:/usr/lib/avr/include/util/delay.h **** 
+  42:/usr/lib/avr/include/util/delay.h **** #include <inttypes.h>
+  43:/usr/lib/avr/include/util/delay.h **** #include <util/delay_basic.h>
+  44:/usr/lib/avr/include/util/delay.h **** #include <math.h>
+  45:/usr/lib/avr/include/util/delay.h **** 
+  46:/usr/lib/avr/include/util/delay.h **** /** \file */
+  47:/usr/lib/avr/include/util/delay.h **** /** \defgroup util_delay <util/delay.h>: Convenience functions for busy-wait delay loops
+  48:/usr/lib/avr/include/util/delay.h ****     \code
+  49:/usr/lib/avr/include/util/delay.h ****     #define F_CPU 1000000UL  // 1 MHz
+  50:/usr/lib/avr/include/util/delay.h ****     //#define F_CPU 14.7456E6
+  51:/usr/lib/avr/include/util/delay.h ****     #include <util/delay.h>
+  52:/usr/lib/avr/include/util/delay.h ****     \endcode
+  53:/usr/lib/avr/include/util/delay.h **** 
+  54:/usr/lib/avr/include/util/delay.h ****     \note As an alternative method, it is possible to pass the
+  55:/usr/lib/avr/include/util/delay.h ****     F_CPU macro down to the compiler from the Makefile.
+  56:/usr/lib/avr/include/util/delay.h ****     Obviously, in that case, no \c \#define statement should be
+  57:/usr/lib/avr/include/util/delay.h ****     used.
+  58:/usr/lib/avr/include/util/delay.h **** 
+  59:/usr/lib/avr/include/util/delay.h ****     The functions in this header file are wrappers around the basic
+  60:/usr/lib/avr/include/util/delay.h ****     busy-wait functions from <util/delay_basic.h>.  They are meant as
+  61:/usr/lib/avr/include/util/delay.h ****     convenience functions where actual time values can be specified
+  62:/usr/lib/avr/include/util/delay.h ****     rather than a number of cycles to wait for.  The idea behind is
+  63:/usr/lib/avr/include/util/delay.h ****     that compile-time constant expressions will be eliminated by
+  64:/usr/lib/avr/include/util/delay.h ****     compiler optimization so floating-point expressions can be used
+  65:/usr/lib/avr/include/util/delay.h ****     to calculate the number of delay cycles needed based on the CPU
+  66:/usr/lib/avr/include/util/delay.h ****     frequency passed by the macro F_CPU.
+  67:/usr/lib/avr/include/util/delay.h **** 
+  68:/usr/lib/avr/include/util/delay.h ****     \note In order for these functions to work as intended, compiler
+  69:/usr/lib/avr/include/util/delay.h ****     optimizations <em>must</em> be enabled, and the delay time
+  70:/usr/lib/avr/include/util/delay.h ****     <em>must</em> be an expression that is a known constant at
+  71:/usr/lib/avr/include/util/delay.h ****     compile-time.  If these requirements are not met, the resulting
+  72:/usr/lib/avr/include/util/delay.h ****     delay will be much longer (and basically unpredictable), and
+  73:/usr/lib/avr/include/util/delay.h ****     applications that otherwise do not use floating-point calculations
+  74:/usr/lib/avr/include/util/delay.h ****     will experience severe code bloat by the floating-point library
+  75:/usr/lib/avr/include/util/delay.h ****     routines linked into the application.
+  76:/usr/lib/avr/include/util/delay.h **** 
+  77:/usr/lib/avr/include/util/delay.h ****     The functions available allow the specification of microsecond, and
+  78:/usr/lib/avr/include/util/delay.h ****     millisecond delays directly, using the application-supplied macro
+  79:/usr/lib/avr/include/util/delay.h ****     F_CPU as the CPU clock frequency (in Hertz).
+  80:/usr/lib/avr/include/util/delay.h **** 
+  81:/usr/lib/avr/include/util/delay.h **** */
+  82:/usr/lib/avr/include/util/delay.h **** 
+  83:/usr/lib/avr/include/util/delay.h **** #if !defined(__DOXYGEN__)
+  84:/usr/lib/avr/include/util/delay.h **** static inline void _delay_us(double __us) __attribute__((always_inline));
+  85:/usr/lib/avr/include/util/delay.h **** static inline void _delay_ms(double __ms) __attribute__((always_inline));
+  86:/usr/lib/avr/include/util/delay.h **** #endif
+  87:/usr/lib/avr/include/util/delay.h **** 
+  88:/usr/lib/avr/include/util/delay.h **** #ifndef F_CPU
+  89:/usr/lib/avr/include/util/delay.h **** /* prevent compiler error by supplying a default */
+  90:/usr/lib/avr/include/util/delay.h **** # warning "F_CPU not defined for <util/delay.h>"
+  91:/usr/lib/avr/include/util/delay.h **** # define F_CPU 1000000UL
+  92:/usr/lib/avr/include/util/delay.h **** #endif
+  93:/usr/lib/avr/include/util/delay.h **** 
+  94:/usr/lib/avr/include/util/delay.h **** #ifndef __OPTIMIZE__
+  95:/usr/lib/avr/include/util/delay.h **** # warning "Compiler optimizations disabled; functions from <util/delay.h> won't work as designed"
+  96:/usr/lib/avr/include/util/delay.h **** #endif
+  97:/usr/lib/avr/include/util/delay.h **** 
+  98:/usr/lib/avr/include/util/delay.h **** #if __HAS_DELAY_CYCLES && defined(__OPTIMIZE__) && \
+  99:/usr/lib/avr/include/util/delay.h ****   !defined(__DELAY_BACKWARD_COMPATIBLE__) &&	   \
+ 100:/usr/lib/avr/include/util/delay.h ****   __STDC_HOSTED__
+ 101:/usr/lib/avr/include/util/delay.h **** #  include <math.h>
+ 102:/usr/lib/avr/include/util/delay.h **** #endif
+ 103:/usr/lib/avr/include/util/delay.h **** 
+ 104:/usr/lib/avr/include/util/delay.h **** /**
+ 105:/usr/lib/avr/include/util/delay.h ****    \ingroup util_delay
+ 106:/usr/lib/avr/include/util/delay.h **** 
+ 107:/usr/lib/avr/include/util/delay.h ****    Perform a delay of \c __ms milliseconds, using _delay_loop_2().
+ 108:/usr/lib/avr/include/util/delay.h **** 
+ 109:/usr/lib/avr/include/util/delay.h ****    The macro F_CPU is supposed to be defined to a
+ 110:/usr/lib/avr/include/util/delay.h ****    constant defining the CPU clock frequency (in Hertz).
+ 111:/usr/lib/avr/include/util/delay.h **** 
+ 112:/usr/lib/avr/include/util/delay.h ****    The maximal possible delay is 262.14 ms / F_CPU in MHz.
+ 113:/usr/lib/avr/include/util/delay.h **** 
+ 114:/usr/lib/avr/include/util/delay.h ****    When the user request delay which exceed the maximum possible one,
+ 115:/usr/lib/avr/include/util/delay.h ****    _delay_ms() provides a decreased resolution functionality. In this
+ 116:/usr/lib/avr/include/util/delay.h ****    mode _delay_ms() will work with a resolution of 1/10 ms, providing
+ 117:/usr/lib/avr/include/util/delay.h ****    delays up to 6.5535 seconds (independent from CPU frequency).  The
+ 118:/usr/lib/avr/include/util/delay.h ****    user will not be informed about decreased resolution.
+ 119:/usr/lib/avr/include/util/delay.h **** 
+ 120:/usr/lib/avr/include/util/delay.h ****    If the avr-gcc toolchain has __builtin_avr_delay_cycles(unsigned long)
+ 121:/usr/lib/avr/include/util/delay.h ****    support, maximal possible delay is 4294967.295 ms/ F_CPU in MHz. For
+ 122:/usr/lib/avr/include/util/delay.h ****    values greater than the maximal possible delay, overflows results in
+ 123:/usr/lib/avr/include/util/delay.h ****    no delay i.e., 0ms.
+ 124:/usr/lib/avr/include/util/delay.h **** 
+ 125:/usr/lib/avr/include/util/delay.h ****    Conversion of __us into clock cycles may not always result in integer.
+ 126:/usr/lib/avr/include/util/delay.h ****    By default, the clock cycles rounded up to next integer. This ensures that
+ 127:/usr/lib/avr/include/util/delay.h ****    the user gets atleast __us microseconds of delay.
+ 128:/usr/lib/avr/include/util/delay.h **** 
+ 129:/usr/lib/avr/include/util/delay.h ****    Alternatively, user can define __DELAY_ROUND_DOWN__ and __DELAY_ROUND_CLOSEST__
+ 130:/usr/lib/avr/include/util/delay.h ****    to round down and round to closest integer.
+ 131:/usr/lib/avr/include/util/delay.h **** 
+ 132:/usr/lib/avr/include/util/delay.h ****    Note: The new implementation of _delay_ms(double __ms) with 
+ 133:/usr/lib/avr/include/util/delay.h ****     __builtin_avr_delay_cycles(unsigned long) support is not backward compatible. 
+ 134:/usr/lib/avr/include/util/delay.h ****    User can define __DELAY_BACKWARD_COMPATIBLE__ to get a backward compatible delay.
+ 135:/usr/lib/avr/include/util/delay.h ****    Also, the backward compatible
+ 136:/usr/lib/avr/include/util/delay.h ****    algorithm will be chosen if the code is compiled in a <em>freestanding
+ 137:/usr/lib/avr/include/util/delay.h ****    environment</em> (GCC option \c -ffreestanding), as the math functions
+ 138:/usr/lib/avr/include/util/delay.h ****    required for rounding are not available to the compiler then.
+ 139:/usr/lib/avr/include/util/delay.h **** 
+ 140:/usr/lib/avr/include/util/delay.h ****  */
+ 141:/usr/lib/avr/include/util/delay.h **** void
+ 142:/usr/lib/avr/include/util/delay.h **** _delay_ms(double __ms)
+ 143:/usr/lib/avr/include/util/delay.h **** {
+ 144:/usr/lib/avr/include/util/delay.h **** 	double __tmp ; 
+ 145:/usr/lib/avr/include/util/delay.h **** #if __HAS_DELAY_CYCLES && defined(__OPTIMIZE__) && \
+ 146:/usr/lib/avr/include/util/delay.h ****   !defined(__DELAY_BACKWARD_COMPATIBLE__) &&	   \
+ 147:/usr/lib/avr/include/util/delay.h ****   __STDC_HOSTED__
+ 148:/usr/lib/avr/include/util/delay.h **** 	uint32_t __ticks_dc;
+ 149:/usr/lib/avr/include/util/delay.h **** 	extern void __builtin_avr_delay_cycles(unsigned long);
+ 150:/usr/lib/avr/include/util/delay.h **** 	__tmp = ((F_CPU) / 1e3) * __ms;
+ 151:/usr/lib/avr/include/util/delay.h **** 
+ 152:/usr/lib/avr/include/util/delay.h **** 	#if defined(__DELAY_ROUND_DOWN__)
+ 153:/usr/lib/avr/include/util/delay.h **** 		__ticks_dc = (uint32_t)fabs(__tmp);
+ 154:/usr/lib/avr/include/util/delay.h **** 
+ 155:/usr/lib/avr/include/util/delay.h **** 	#elif defined(__DELAY_ROUND_CLOSEST__)
+ 156:/usr/lib/avr/include/util/delay.h **** 		__ticks_dc = (uint32_t)(fabs(__tmp)+0.5);
+ 157:/usr/lib/avr/include/util/delay.h **** 
+ 158:/usr/lib/avr/include/util/delay.h **** 	#else
+ 159:/usr/lib/avr/include/util/delay.h **** 		//round up by default
+ 160:/usr/lib/avr/include/util/delay.h **** 		__ticks_dc = (uint32_t)(ceil(fabs(__tmp)));
+ 161:/usr/lib/avr/include/util/delay.h **** 	#endif
+ 162:/usr/lib/avr/include/util/delay.h **** 
+ 163:/usr/lib/avr/include/util/delay.h **** 	__builtin_avr_delay_cycles(__ticks_dc);
+ 193               	.LM7:
+ 194 0068 8BE2      		ldi r24,lo8(299)
+ 195 006a 91E0      		ldi r25,hi8(299)
+ 196 006c 0197      		1: sbiw r24,1
+ 197 006e 01F4      		brne 1b
+ 198 0070 00C0      		rjmp .
+ 199 0072 0000      		nop
+ 200               	.LBE7:
+ 201               	.LBE6:
+ 203               	.Ltext2:
+ 143:LEDTimedCandle.c ****   _delay_ms(1);
+ 144:LEDTimedCandle.c ****   //turns LED2 LOW
+ 145:LEDTimedCandle.c ****   PORTB &= ~(1 << LED2);//  digitalWrite(LED2, LOW);
+ 205               	.LM8:
+ 206 0074 C498      		cbi 0x18,4
+ 146:LEDTimedCandle.c **** #endif
+ 147:LEDTimedCandle.c ****   
+ 148:LEDTimedCandle.c ****   if(sec8_counter>=HOUR_INTERVAL){
+ 208               	.LM9:
+ 209 0076 8091 0000 		lds r24,sec8_counter
+ 210 007a 9091 0000 		lds r25,sec8_counter+1
+ 211 007e 823C      		cpi r24,-62
+ 212 0080 9140      		sbci r25,1
+ 213 0082 00F0      		brlo .L8
+ 149:LEDTimedCandle.c ****     sec8_counter=0;
+ 215               	.LM10:
+ 216 0084 1092 0000 		sts sec8_counter+1,__zero_reg__
+ 217 0088 1092 0000 		sts sec8_counter,__zero_reg__
+ 150:LEDTimedCandle.c ****     if(bLedIsOn==1){
+ 219               	.LM11:
+ 220 008c 8091 0000 		lds r24,bLedIsOn
+ 221 0090 8130      		cpi r24,lo8(1)
+ 222 0092 01F4      		brne .L9
+ 151:LEDTimedCandle.c ****       on_hours++;
+ 224               	.LM12:
+ 225 0094 8091 0000 		lds r24,on_hours
+ 226 0098 8F5F      		subi r24,lo8(-(1))
+ 227 009a 8093 0000 		sts on_hours,r24
+ 152:LEDTimedCandle.c ****       if(on_hours>=MAX_ON_HOURS){
+ 229               	.LM13:
+ 230 009e 8091 0000 		lds r24,on_hours
+ 231 00a2 8430      		cpi r24,lo8(4)
+ 232 00a4 00F0      		brlo .L8
+ 153:LEDTimedCandle.c ****         bLedIsOn=0; //switch to OFF mode
+ 234               	.LM14:
+ 235 00a6 1092 0000 		sts bLedIsOn,__zero_reg__
+ 154:LEDTimedCandle.c ****         off_hours=0;
+ 237               	.LM15:
+ 238 00aa 1092 0000 		sts off_hours,__zero_reg__
+ 239 00ae 00C0      		rjmp .L8
+ 240               	.L9:
+ 155:LEDTimedCandle.c ****       }
+ 156:LEDTimedCandle.c ****     }else{
+ 157:LEDTimedCandle.c ****       off_hours++;
+ 242               	.LM16:
+ 243 00b0 8091 0000 		lds r24,off_hours
+ 244 00b4 8F5F      		subi r24,lo8(-(1))
+ 245 00b6 8093 0000 		sts off_hours,r24
+ 158:LEDTimedCandle.c ****       if(off_hours>=MAX_OFF_HOURS){
+ 247               	.LM17:
+ 248 00ba 8091 0000 		lds r24,off_hours
+ 249 00be 8431      		cpi r24,lo8(20)
+ 250 00c0 00F0      		brlo .L8
+ 159:LEDTimedCandle.c ****         bLedIsOn=1; //switch to ON mode
+ 252               	.LM18:
+ 253 00c2 81E0      		ldi r24,lo8(1)
+ 254 00c4 8093 0000 		sts bLedIsOn,r24
+ 160:LEDTimedCandle.c ****         on_hours=0;
+ 256               	.LM19:
+ 257 00c8 1092 0000 		sts on_hours,__zero_reg__
+ 258               	.L8:
+ 161:LEDTimedCandle.c ****       }
+ 162:LEDTimedCandle.c ****     }
+ 163:LEDTimedCandle.c ****   }
+ 164:LEDTimedCandle.c ****   wdt_reset();
+ 260               	.LM20:
+ 261               	/* #APP */
+ 262               	 ;  164 "LEDTimedCandle.c" 1
+ 263 00cc A895      		wdr
+ 264               	 ;  0 "" 2
+ 265               	/* epilogue start */
+ 165:LEDTimedCandle.c **** }  // end of WDT_vect
+ 267               	.LM21:
+ 268               	/* #NOAPP */
+ 269 00ce 9F91      		pop r25
+ 270 00d0 8F91      		pop r24
+ 271 00d2 2F91      		pop r18
+ 272 00d4 0F90      		pop r0
+ 273 00d6 0FBE      		out __SREG__,r0
+ 274 00d8 0F90      		pop r0
+ 275 00da 1F90      		pop r1
+ 276 00dc 1895      		reti
+ 278               	.Lscope2:
+ 280               		.stabd	78,0,0
+ 282               	.global	resetWatchdog
+ 284               	resetWatchdog:
+ 285               		.stabd	46,0,0
+ 166:LEDTimedCandle.c **** 
+ 167:LEDTimedCandle.c **** void resetWatchdog (void)
+ 168:LEDTimedCandle.c **** {
+ 287               	.LM22:
+ 288               	.LFBB3:
+ 289               	/* prologue: function */
+ 290               	/* frame size = 0 */
+ 291               	/* stack size = 0 */
+ 292               	.L__stack_usage = 0
+ 169:LEDTimedCandle.c ****   // clear various "reset" flags
+ 170:LEDTimedCandle.c ****   MCUSR = 0;    
+ 294               	.LM23:
+ 295 00de 14BE      		out 0x34,__zero_reg__
+ 171:LEDTimedCandle.c ****   // allow changes, disable reset, clear existing interrupt
+ 172:LEDTimedCandle.c ****   WDTCR = bit (WDCE) | bit (WDE) | bit (WDIF);
+ 297               	.LM24:
+ 298 00e0 88E9      		ldi r24,lo8(-104)
+ 299 00e2 81BD      		out 0x21,r24
+ 173:LEDTimedCandle.c ****   // set interrupt mode and an interval (WDE must be changed from 1 to 0 here)
+ 174:LEDTimedCandle.c ****   ///WDTCR = bit (WDIE) | bit (WDP2) | bit (WDP1) | bit (WDP0);    // set WDIE, and 2 seconds delay
+ 175:LEDTimedCandle.c ****   WDTCR = bit (WDIE) | bit (WDP3) | bit (WDP0);    // set WDIE, and 8 seconds delay
+ 301               	.LM25:
+ 302 00e4 81E6      		ldi r24,lo8(97)
+ 303 00e6 81BD      		out 0x21,r24
+ 176:LEDTimedCandle.c ****   // pat the dog
+ 177:LEDTimedCandle.c ****   wdt_reset();  
+ 305               	.LM26:
+ 306               	/* #APP */
+ 307               	 ;  177 "LEDTimedCandle.c" 1
+ 308 00e8 A895      		wdr
+ 309               	 ;  0 "" 2
+ 310               	/* #NOAPP */
+ 311 00ea 0895      		ret
+ 313               	.Lscope3:
+ 315               		.stabd	78,0,0
+ 317               	.global	goToSleep
+ 319               	goToSleep:
+ 320               		.stabd	46,0,0
+ 178:LEDTimedCandle.c **** }  // end of resetWatchdog
+ 179:LEDTimedCandle.c ****  
+ 180:LEDTimedCandle.c **** 
+ 181:LEDTimedCandle.c ****  
+ 182:LEDTimedCandle.c **** void goToSleep(void)
+ 183:LEDTimedCandle.c **** {
+ 322               	.LM27:
+ 323               	.LFBB4:
+ 324               	/* prologue: function */
+ 325               	/* frame size = 0 */
+ 326               	/* stack size = 0 */
+ 327               	.L__stack_usage = 0
+ 184:LEDTimedCandle.c ****   set_sleep_mode (SLEEP_MODE_PWR_DOWN);
+ 329               	.LM28:
+ 330 00ec 85B7      		in r24,0x35
+ 331 00ee 877E      		andi r24,lo8(-25)
+ 332 00f0 8061      		ori r24,lo8(16)
+ 333 00f2 85BF      		out 0x35,r24
+ 185:LEDTimedCandle.c ****   ADCSRA = 0;            // turn off ADC
+ 335               	.LM29:
+ 336 00f4 16B8      		out 0x6,__zero_reg__
+ 186:LEDTimedCandle.c ****   power_all_disable ();  // power off ADC, Timer 0 and 1, serial interface
+ 338               	.LM30:
+ 339 00f6 85B5      		in r24,0x25
+ 340 00f8 8360      		ori r24,lo8(3)
+ 341 00fa 85BD      		out 0x25,r24
+ 187:LEDTimedCandle.c ****   //set all unused ports to output, uses another 8 bytes
+ 188:LEDTimedCandle.c **** /*  
+ 189:LEDTimedCandle.c ****   pinMode(0, OUTPUT);
+ 190:LEDTimedCandle.c ****   pinMode(1, OUTPUT);
+ 191:LEDTimedCandle.c ****   pinMode(2, OUTPUT);
+ 192:LEDTimedCandle.c ****   PORTB = 0b000000; //all low
+ 193:LEDTimedCandle.c **** */
+ 194:LEDTimedCandle.c ****   cli(); //noInterrupts ();       // timed sequence coming up
+ 343               	.LM31:
+ 344               	/* #APP */
+ 345               	 ;  194 "LEDTimedCandle.c" 1
+ 346 00fc F894      		cli
+ 347               	 ;  0 "" 2
+ 195:LEDTimedCandle.c ****   resetWatchdog ();      // get watchdog ready
+ 349               	.LM32:
+ 350               	/* #NOAPP */
+ 351 00fe 00D0      		rcall resetWatchdog
+ 196:LEDTimedCandle.c ****   sleep_enable ();       // ready to sleep
+ 353               	.LM33:
+ 354 0100 85B7      		in r24,0x35
+ 355 0102 8062      		ori r24,lo8(32)
+ 356 0104 85BF      		out 0x35,r24
+ 197:LEDTimedCandle.c ****   sei(); //interrupts ();         // interrupts are required now
+ 358               	.LM34:
+ 359               	/* #APP */
+ 360               	 ;  197 "LEDTimedCandle.c" 1
+ 361 0106 7894      		sei
+ 362               	 ;  0 "" 2
+ 198:LEDTimedCandle.c ****   sleep_cpu ();        // sleep                
+ 364               	.LM35:
+ 365               	 ;  198 "LEDTimedCandle.c" 1
+ 366 0108 8895      		sleep
+ 367               		
+ 368               	 ;  0 "" 2
+ 199:LEDTimedCandle.c ****   sleep_disable ();      // precaution
+ 370               	.LM36:
+ 371               	/* #NOAPP */
+ 372 010a 85B7      		in r24,0x35
+ 373 010c 8F7D      		andi r24,lo8(-33)
+ 374 010e 85BF      		out 0x35,r24
+ 200:LEDTimedCandle.c ****   power_all_enable();//power_all_enable ();   // power everything back on
+ 376               	.LM37:
+ 377 0110 85B5      		in r24,0x25
+ 378 0112 8C7F      		andi r24,lo8(-4)
+ 379 0114 85BD      		out 0x25,r24
+ 380 0116 0895      		ret
+ 382               	.Lscope4:
+ 384               		.stabd	78,0,0
+ 386               	.global	doCandle
+ 388               	doCandle:
+ 389               		.stabd	46,0,0
+ 201:LEDTimedCandle.c **** }  // end of goToSleep
+ 202:LEDTimedCandle.c **** 
+ 203:LEDTimedCandle.c **** 
+ 204:LEDTimedCandle.c **** 
+ 205:LEDTimedCandle.c **** //mimic candle: https://github.com/cpldcpu/CandleLEDhack/blob/master/Emulator/CandeflickerLED.c
+ 206:LEDTimedCandle.c **** void doCandle(void)
+ 207:LEDTimedCandle.c **** {
+ 391               	.LM38:
+ 392               	.LFBB5:
+ 393               	/* prologue: function */
+ 394               	/* frame size = 0 */
+ 395               	/* stack size = 0 */
+ 396               	.L__stack_usage = 0
+ 397               	.LBB8:
+ 398               	.LBB9:
+ 400               	.Ltext3:
+ 164:/usr/lib/avr/include/util/delay.h **** 
+ 165:/usr/lib/avr/include/util/delay.h **** #else
+ 166:/usr/lib/avr/include/util/delay.h **** 	uint16_t __ticks;
+ 167:/usr/lib/avr/include/util/delay.h **** 	__tmp = ((F_CPU) / 4e3) * __ms;
+ 168:/usr/lib/avr/include/util/delay.h **** 	if (__tmp < 1.0)
+ 169:/usr/lib/avr/include/util/delay.h **** 		__ticks = 1;
+ 170:/usr/lib/avr/include/util/delay.h **** 	else if (__tmp > 65535)
+ 171:/usr/lib/avr/include/util/delay.h **** 	{
+ 172:/usr/lib/avr/include/util/delay.h **** 		//	__ticks = requested delay in 1/10 ms
+ 173:/usr/lib/avr/include/util/delay.h **** 		__ticks = (uint16_t) (__ms * 10.0);
+ 174:/usr/lib/avr/include/util/delay.h **** 		while(__ticks)
+ 175:/usr/lib/avr/include/util/delay.h **** 		{
+ 176:/usr/lib/avr/include/util/delay.h **** 			// wait 1/10 ms
+ 177:/usr/lib/avr/include/util/delay.h **** 			_delay_loop_2(((F_CPU) / 4e3) / 10);
+ 178:/usr/lib/avr/include/util/delay.h **** 			__ticks --;
+ 179:/usr/lib/avr/include/util/delay.h **** 		}
+ 180:/usr/lib/avr/include/util/delay.h **** 		return;
+ 181:/usr/lib/avr/include/util/delay.h **** 	}
+ 182:/usr/lib/avr/include/util/delay.h **** 	else
+ 183:/usr/lib/avr/include/util/delay.h **** 		__ticks = (uint16_t)__tmp;
+ 184:/usr/lib/avr/include/util/delay.h **** 	_delay_loop_2(__ticks);
+ 185:/usr/lib/avr/include/util/delay.h **** #endif
+ 186:/usr/lib/avr/include/util/delay.h **** }
+ 187:/usr/lib/avr/include/util/delay.h **** 
+ 188:/usr/lib/avr/include/util/delay.h **** /**
+ 189:/usr/lib/avr/include/util/delay.h ****    \ingroup util_delay
+ 190:/usr/lib/avr/include/util/delay.h **** 
+ 191:/usr/lib/avr/include/util/delay.h ****    Perform a delay of \c __us microseconds, using _delay_loop_1().
+ 192:/usr/lib/avr/include/util/delay.h **** 
+ 193:/usr/lib/avr/include/util/delay.h ****    The macro F_CPU is supposed to be defined to a
+ 194:/usr/lib/avr/include/util/delay.h ****    constant defining the CPU clock frequency (in Hertz).
+ 195:/usr/lib/avr/include/util/delay.h **** 
+ 196:/usr/lib/avr/include/util/delay.h ****    The maximal possible delay is 768 us / F_CPU in MHz.
+ 197:/usr/lib/avr/include/util/delay.h **** 
+ 198:/usr/lib/avr/include/util/delay.h ****    If the user requests a delay greater than the maximal possible one,
+ 199:/usr/lib/avr/include/util/delay.h ****    _delay_us() will automatically call _delay_ms() instead.  The user
+ 200:/usr/lib/avr/include/util/delay.h ****    will not be informed about this case.
+ 201:/usr/lib/avr/include/util/delay.h **** 
+ 202:/usr/lib/avr/include/util/delay.h ****    If the avr-gcc toolchain has __builtin_avr_delay_cycles(unsigned long)
+ 203:/usr/lib/avr/include/util/delay.h ****    support, maximal possible delay is 4294967.295 us/ F_CPU in MHz. For
+ 204:/usr/lib/avr/include/util/delay.h ****    values greater than the maximal possible delay, overflow results in
+ 205:/usr/lib/avr/include/util/delay.h ****    no delay i.e., 0us.
+ 206:/usr/lib/avr/include/util/delay.h ****   
+ 207:/usr/lib/avr/include/util/delay.h ****    Conversion of __us into clock cycles may not always result in integer.
+ 208:/usr/lib/avr/include/util/delay.h ****    By default, the clock cycles rounded up to next integer. This ensures that
+ 209:/usr/lib/avr/include/util/delay.h ****    the user gets atleast __us microseconds of delay.
+ 210:/usr/lib/avr/include/util/delay.h **** 
+ 211:/usr/lib/avr/include/util/delay.h ****    Alternatively, user can define __DELAY_ROUND_DOWN__ and __DELAY_ROUND_CLOSEST__
+ 212:/usr/lib/avr/include/util/delay.h ****    to round down and round to closest integer.
+ 213:/usr/lib/avr/include/util/delay.h ****  
+ 214:/usr/lib/avr/include/util/delay.h ****    Note: The new implementation of _delay_us(double __us) with 
+ 215:/usr/lib/avr/include/util/delay.h ****     __builtin_avr_delay_cycles(unsigned long) support is not backward compatible.
+ 216:/usr/lib/avr/include/util/delay.h ****    User can define __DELAY_BACKWARD_COMPATIBLE__ to get a backward compatible delay.
+ 217:/usr/lib/avr/include/util/delay.h ****    Also, the backward compatible
+ 218:/usr/lib/avr/include/util/delay.h ****    algorithm will be chosen if the code is compiled in a <em>freestanding
+ 219:/usr/lib/avr/include/util/delay.h ****    environment</em> (GCC option \c -ffreestanding), as the math functions
+ 220:/usr/lib/avr/include/util/delay.h ****    required for rounding are not available to the compiler then.
+ 221:/usr/lib/avr/include/util/delay.h **** 
+ 222:/usr/lib/avr/include/util/delay.h ****  */
+ 223:/usr/lib/avr/include/util/delay.h **** void
+ 224:/usr/lib/avr/include/util/delay.h **** _delay_us(double __us)
+ 225:/usr/lib/avr/include/util/delay.h **** {
+ 226:/usr/lib/avr/include/util/delay.h **** 	double __tmp ; 
+ 227:/usr/lib/avr/include/util/delay.h **** #if __HAS_DELAY_CYCLES && defined(__OPTIMIZE__) && \
+ 228:/usr/lib/avr/include/util/delay.h ****   !defined(__DELAY_BACKWARD_COMPATIBLE__) &&	   \
+ 229:/usr/lib/avr/include/util/delay.h ****   __STDC_HOSTED__
+ 230:/usr/lib/avr/include/util/delay.h **** 	uint32_t __ticks_dc;
+ 231:/usr/lib/avr/include/util/delay.h **** 	extern void __builtin_avr_delay_cycles(unsigned long);
+ 232:/usr/lib/avr/include/util/delay.h **** 	__tmp = ((F_CPU) / 1e6) * __us;
+ 233:/usr/lib/avr/include/util/delay.h **** 
+ 234:/usr/lib/avr/include/util/delay.h **** 	#if defined(__DELAY_ROUND_DOWN__)
+ 235:/usr/lib/avr/include/util/delay.h **** 		__ticks_dc = (uint32_t)fabs(__tmp);
+ 236:/usr/lib/avr/include/util/delay.h **** 
+ 237:/usr/lib/avr/include/util/delay.h **** 	#elif defined(__DELAY_ROUND_CLOSEST__)
+ 238:/usr/lib/avr/include/util/delay.h **** 		__ticks_dc = (uint32_t)(fabs(__tmp)+0.5);
+ 239:/usr/lib/avr/include/util/delay.h **** 
+ 240:/usr/lib/avr/include/util/delay.h **** 	#else
+ 241:/usr/lib/avr/include/util/delay.h **** 		//round up by default
+ 242:/usr/lib/avr/include/util/delay.h **** 		__ticks_dc = (uint32_t)(ceil(fabs(__tmp)));
+ 243:/usr/lib/avr/include/util/delay.h **** 	#endif
+ 244:/usr/lib/avr/include/util/delay.h **** 
+ 245:/usr/lib/avr/include/util/delay.h **** 	__builtin_avr_delay_cycles(__ticks_dc);
+ 402               	.LM39:
+ 403 0118 89E3      		ldi r24,lo8(57)
+ 404 011a 8A95      		1: dec r24
+ 405 011c 01F4      		brne 1b
+ 406               	.LBE9:
+ 407               	.LBE8:
+ 409               	.Ltext4:
+ 208:LEDTimedCandle.c **** if(F_CPU==150000){
+ 209:LEDTimedCandle.c ****   _delay_us(1e6/440/16*8);
+ 210:LEDTimedCandle.c **** }else{
+ 211:LEDTimedCandle.c ****   _delay_us(1e6/440/16);   // Main clock=440*16 Hz
+ 212:LEDTimedCandle.c **** }
+ 213:LEDTimedCandle.c ****   // PWM    
+ 214:LEDTimedCandle.c ****   PWM_CTR++;
+ 411               	.LM40:
+ 412 011e 8091 0000 		lds r24,PWM_CTR
+ 413 0122 8F5F      		subi r24,lo8(-(1))
+ 215:LEDTimedCandle.c ****   PWM_CTR&=0xf;   // only 4 bit
+ 415               	.LM41:
+ 416 0124 8F70      		andi r24,lo8(15)
+ 417 0126 8093 0000 		sts PWM_CTR,r24
+ 216:LEDTimedCandle.c ****   
+ 217:LEDTimedCandle.c ****   if (PWM_CTR<=PWM_VAL) {
+ 419               	.LM42:
+ 420 012a 9091 0000 		lds r25,PWM_VAL
+ 421 012e 9817      		cp r25,r24
+ 422 0130 00F0      		brlo .L14
+ 218:LEDTimedCandle.c ****       //turns B0 HIGH
+ 219:LEDTimedCandle.c ****      PORTB |=(1<<LED);//digitalWrite (LED, HIGH);
+ 424               	.LM43:
+ 425 0132 C39A      		sbi 0x18,3
+ 426 0134 00C0      		rjmp .L15
+ 427               	.L14:
+ 220:LEDTimedCandle.c ****   } else {
+ 221:LEDTimedCandle.c ****     //turns B3 LOW
+ 222:LEDTimedCandle.c ****     PORTB &= ~(1 << LED);//digitalWrite (LED, LOW);
+ 429               	.LM44:
+ 430 0136 C398      		cbi 0x18,3
+ 431               	.L15:
+ 223:LEDTimedCandle.c ****   }
+ 224:LEDTimedCandle.c ****   // FRAME
+ 225:LEDTimedCandle.c ****   if (PWM_CTR==0) 
+ 433               	.LM45:
+ 434 0138 8091 0000 		lds r24,PWM_CTR
+ 435 013c 8111      		cpse r24,__zero_reg__
+ 436 013e 00C0      		rjmp .L13
+ 226:LEDTimedCandle.c ****   {
+ 227:LEDTimedCandle.c ****     FRAME_CTR++;
+ 438               	.LM46:
+ 439 0140 8091 0000 		lds r24,FRAME_CTR
+ 440 0144 8F5F      		subi r24,lo8(-(1))
+ 228:LEDTimedCandle.c ****     FRAME_CTR&=0x1f;
+ 442               	.LM47:
+ 443 0146 982F      		mov r25,r24
+ 444 0148 9F71      		andi r25,lo8(31)
+ 445 014a 9093 0000 		sts FRAME_CTR,r25
+ 229:LEDTimedCandle.c ****     
+ 230:LEDTimedCandle.c ****     if ((FRAME_CTR&0x07)==0)  // generate a new random number every 8 cycles. In reality this is mo
+ 447               	.LM48:
+ 448 014e 8770      		andi r24,lo8(7)
+ 449 0150 01F4      		brne .L18
+ 231:LEDTimedCandle.c ****     {
+ 232:LEDTimedCandle.c ****       RAND=Rand()&0x1f;
+ 451               	.LM49:
+ 452 0152 00D0      		rcall Rand
+ 453 0154 982F      		mov r25,r24
+ 454 0156 9F71      		andi r25,lo8(31)
+ 455 0158 9093 0000 		sts RAND,r25
+ 233:LEDTimedCandle.c ****       randflag=((RAND&0x0c)!=0); //optimized, saves 14 bytes!         
+ 457               	.LM50:
+ 458 015c 8C70      		andi r24,lo8(12)
+ 459 015e 91E0      		ldi r25,lo8(1)
+ 460 0160 01F4      		brne .L19
+ 461 0162 90E0      		ldi r25,0
+ 462               	.L19:
+ 463 0164 9093 0000 		sts randflag,r25
+ 464               	.L18:
+ 234:LEDTimedCandle.c **** /*      if ((RAND&0x0c)!=0) 
+ 235:LEDTimedCandle.c ****         randflag=1; 
+ 236:LEDTimedCandle.c ****       else 
+ 237:LEDTimedCandle.c ****         randflag=0;// only update if valid         
+ 238:LEDTimedCandle.c **** */    
+ 239:LEDTimedCandle.c ****     }
+ 240:LEDTimedCandle.c ****     // NEW FRAME            
+ 241:LEDTimedCandle.c ****     if (FRAME_CTR==0)
+ 466               	.LM51:
+ 467 0168 8091 0000 		lds r24,FRAME_CTR
+ 468 016c 8111      		cpse r24,__zero_reg__
+ 469 016e 00C0      		rjmp .L20
+ 242:LEDTimedCandle.c ****     {
+ 243:LEDTimedCandle.c ****       PWM_VAL=NEXTBRIGHT; // reload PWM
+ 471               	.LM52:
+ 472 0170 8091 0000 		lds r24,NEXTBRIGHT
+ 473 0174 8093 0000 		sts PWM_VAL,r24
+ 244:LEDTimedCandle.c ****       randflag=1;       // force update at beginning of frame
+ 475               	.LM53:
+ 476 0178 81E0      		ldi r24,lo8(1)
+ 477 017a 8093 0000 		sts randflag,r24
+ 478               	.L20:
+ 245:LEDTimedCandle.c ****     }         
+ 246:LEDTimedCandle.c ****     
+ 247:LEDTimedCandle.c ****     if (randflag)
+ 480               	.LM54:
+ 481 017e 8091 0000 		lds r24,randflag
+ 482 0182 8823      		tst r24
+ 483 0184 01F0      		breq .L13
+ 248:LEDTimedCandle.c ****     {
+ 249:LEDTimedCandle.c ****       NEXTBRIGHT=RAND>15?15:RAND;   
+ 485               	.LM55:
+ 486 0186 8091 0000 		lds r24,RAND
+ 487 018a 8031      		cpi r24,lo8(16)
+ 488 018c 00F0      		brlo .L22
+ 489 018e 8FE0      		ldi r24,lo8(15)
+ 490               	.L22:
+ 491 0190 8093 0000 		sts NEXTBRIGHT,r24
+ 492               	.L13:
+ 493 0194 0895      		ret
+ 495               	.Lscope5:
+ 497               		.stabd	78,0,0
+ 499               	.global	setup
+ 501               	setup:
+ 502               		.stabd	46,0,0
+ 250:LEDTimedCandle.c ****     }
+ 251:LEDTimedCandle.c ****   }
+ 252:LEDTimedCandle.c **** }//end doCandle
+ 253:LEDTimedCandle.c **** 
+ 254:LEDTimedCandle.c **** void setup (void)
+ 255:LEDTimedCandle.c **** {
+ 504               	.LM56:
+ 505               	.LFBB6:
+ 506               	/* prologue: function */
+ 507               	/* frame size = 0 */
+ 508               	/* stack size = 0 */
+ 509               	.L__stack_usage = 0
+ 256:LEDTimedCandle.c ****   resetWatchdog ();  // do this first in case WDT fires
+ 511               	.LM57:
+ 512 0196 00D0      		rcall resetWatchdog
+ 257:LEDTimedCandle.c **** 
+ 258:LEDTimedCandle.c ****   CLKPR=_BV(CLKPCE);
+ 514               	.LM58:
+ 515 0198 80E8      		ldi r24,lo8(-128)
+ 516 019a 86BD      		out 0x26,r24
+ 259:LEDTimedCandle.c ****   CLKPR=0;      // Set clk division factor to 1
+ 518               	.LM59:
+ 519 019c 16BC      		out 0x26,__zero_reg__
+ 260:LEDTimedCandle.c ****   
+ 261:LEDTimedCandle.c ****   //Set PORTB to all outputs
+ 262:LEDTimedCandle.c ****   DDRB = 0xFF;
+ 521               	.LM60:
+ 522 019e 8FEF      		ldi r24,lo8(-1)
+ 523 01a0 87BB      		out 0x17,r24
+ 263:LEDTimedCandle.c **** /*
+ 264:LEDTimedCandle.c ****   pinMode (LED, OUTPUT);
+ 265:LEDTimedCandle.c ****   #ifdef USE_HEART_BEAT_LED
+ 266:LEDTimedCandle.c ****   pinMode (LED2, OUTPUT);
+ 267:LEDTimedCandle.c **** */
+ 268:LEDTimedCandle.c **** 
+ 269:LEDTimedCandle.c ****   //turns B0 HIGH
+ 270:LEDTimedCandle.c ****   //PORTB |=(1<<0);
+ 271:LEDTimedCandle.c ****   //turns B3 LOW
+ 272:LEDTimedCandle.c ****   PORTB &= ~(1 << LED);
+ 525               	.LM61:
+ 526 01a2 C398      		cbi 0x18,3
+ 273:LEDTimedCandle.c **** #ifdef USE_HEART_BEAT_LED
+ 274:LEDTimedCandle.c ****   //turns B4 LOW
+ 275:LEDTimedCandle.c ****   PORTB &= ~(1 << LED2);//  digitalWrite(LED2, LOW);
+ 528               	.LM62:
+ 529 01a4 C498      		cbi 0x18,4
+ 276:LEDTimedCandle.c ****   #endif
+ 277:LEDTimedCandle.c ****   //disable BOD
+ 278:LEDTimedCandle.c **** //  MCUCR |= _BV(BODS) | _BV(BODSE);
+ 279:LEDTimedCandle.c **** #ifdef USE_I2C
+ 280:LEDTimedCandle.c ****     I2C_Init(); //i2c.h
+ 281:LEDTimedCandle.c **** #else
+ 282:LEDTimedCandle.c ****     i2c_init(); //i2cmasher.h
+ 531               	.LM63:
+ 532 01a6 00C0      		rjmp i2c_init
+ 534               	.Lscope6:
+ 536               		.stabd	78,0,0
+ 538               	.global	loop
+ 540               	loop:
+ 541               		.stabd	46,0,0
+ 283:LEDTimedCandle.c **** #endif
+ 284:LEDTimedCandle.c **** }  // end of setup
+ 285:LEDTimedCandle.c **** 
+ 286:LEDTimedCandle.c **** void loop (void)
+ 287:LEDTimedCandle.c **** {
+ 543               	.LM64:
+ 544               	.LFBB7:
+ 545               	/* prologue: function */
+ 546               	/* frame size = 0 */
+ 547               	/* stack size = 0 */
+ 548               	.L__stack_usage = 0
+ 288:LEDTimedCandle.c ****   //sleep 20 hours and work 4 hours
+ 289:LEDTimedCandle.c ****   cli(); //noInterrupts();
+ 550               	.LM65:
+ 551               	/* #APP */
+ 552               	 ;  289 "LEDTimedCandle.c" 1
+ 553 01a8 F894      		cli
+ 554               	 ;  0 "" 2
+ 290:LEDTimedCandle.c ****   if(bLedIsOn==1){
+ 556               	.LM66:
+ 557               	/* #NOAPP */
+ 558 01aa 8091 0000 		lds r24,bLedIsOn
+ 559 01ae 8130      		cpi r24,lo8(1)
+ 560 01b0 01F4      		brne .L28
+ 291:LEDTimedCandle.c ****     doCandle();
+ 562               	.LM67:
+ 563 01b2 00D0      		rcall doCandle
+ 564 01b4 00C0      		rjmp .L29
+ 565               	.L28:
+ 292:LEDTimedCandle.c ****   }else{
+ 293:LEDTimedCandle.c ****     //turns B3 LOW
+ 294:LEDTimedCandle.c ****     PORTB &= ~(1 << LED);
+ 567               	.LM68:
+ 568 01b6 C398      		cbi 0x18,3
+ 295:LEDTimedCandle.c ****     //digitalWrite (LED, LOW); //ensure LED is OFF
+ 296:LEDTimedCandle.c ****    goToSleep ();
+ 570               	.LM69:
+ 571 01b8 00D0      		rcall goToSleep
+ 572               	.L29:
+ 297:LEDTimedCandle.c ****   }
+ 298:LEDTimedCandle.c ****   sei(); //interrupts();
+ 574               	.LM70:
+ 575               	/* #APP */
+ 576               	 ;  298 "LEDTimedCandle.c" 1
+ 577 01ba 7894      		sei
+ 578               	 ;  0 "" 2
+ 579               	/* #NOAPP */
+ 580 01bc 0895      		ret
+ 582               	.Lscope7:
+ 584               		.stabd	78,0,0
+ 585               		.section	.text.startup,"ax",@progbits
+ 587               	.global	main
+ 589               	main:
+ 590               		.stabd	46,0,0
+ 299:LEDTimedCandle.c **** }  // end of loop
+ 300:LEDTimedCandle.c **** 
+ 301:LEDTimedCandle.c **** int main(void){
+ 592               	.LM71:
+ 593               	.LFBB8:
+ 594               	/* prologue: function */
+ 595               	/* frame size = 0 */
+ 596               	/* stack size = 0 */
+ 597               	.L__stack_usage = 0
+ 302:LEDTimedCandle.c ****     setup();
+ 599               	.LM72:
+ 600 0000 00D0      		rcall setup
+ 601               	.L31:
+ 303:LEDTimedCandle.c ****     while(1) {
+ 304:LEDTimedCandle.c ****         loop();
+ 603               	.LM73:
+ 604 0002 00D0      		rcall loop
+ 605 0004 00C0      		rjmp .L31
+ 607               	.Lscope8:
+ 609               		.stabd	78,0,0
+ 610               		.local	Z.1636
+ 611               		.comm	Z.1636,4,1
+ 612               	.global	randflag
+ 613               		.section .bss
+ 616               	randflag:
+ 617 0000 00        		.zero	1
+ 618               	.global	RAND
+ 621               	RAND:
+ 622 0001 00        		.zero	1
+ 623               	.global	NEXTBRIGHT
+ 626               	NEXTBRIGHT:
+ 627 0002 00        		.zero	1
+ 628               	.global	PWM_VAL
+ 631               	PWM_VAL:
+ 632 0003 00        		.zero	1
+ 633               	.global	FRAME_CTR
+ 636               	FRAME_CTR:
+ 637 0004 00        		.zero	1
+ 638               	.global	PWM_CTR
+ 641               	PWM_CTR:
+ 642 0005 00        		.zero	1
+ 643               	.global	bLedIsOn
+ 644               		.data
+ 647               	bLedIsOn:
+ 648 0000 01        		.byte	1
+ 649               	.global	off_hours
+ 650               		.section .bss
+ 653               	off_hours:
+ 654 0006 00        		.zero	1
+ 655               	.global	on_hours
+ 658               	on_hours:
+ 659 0007 00        		.zero	1
+ 660               	.global	sec8_counter
+ 663               	sec8_counter:
+ 664 0008 0000      		.zero	2
+ 675               		.text
+ 677               	.Letext0:
+ 678               		.ident	"GCC: (GNU) 4.8.1"
+ 679               	.global __do_copy_data
+ 680               	.global __do_clear_bss
+DEFINED SYMBOLS
+                            *ABS*:00000000 LEDTimedCandle.c
+     /tmp/ccbOijoG.s:2      *ABS*:0000003d __SP_L__
+     /tmp/ccbOijoG.s:3      *ABS*:0000003f __SREG__
+     /tmp/ccbOijoG.s:4      *ABS*:00000000 __tmp_reg__
+     /tmp/ccbOijoG.s:5      *ABS*:00000001 __zero_reg__
+     /tmp/ccbOijoG.s:110    .text:00000000 Rand
+                             .bss:0000000a Z.1636
+     /tmp/ccbOijoG.s:161    .text:00000044 __vector_8
+     /tmp/ccbOijoG.s:663    .bss:00000008 sec8_counter
+     /tmp/ccbOijoG.s:647    .data:00000000 bLedIsOn
+     /tmp/ccbOijoG.s:658    .bss:00000007 on_hours
+     /tmp/ccbOijoG.s:653    .bss:00000006 off_hours
+     /tmp/ccbOijoG.s:284    .text:000000de resetWatchdog
+     /tmp/ccbOijoG.s:319    .text:000000ec goToSleep
+     /tmp/ccbOijoG.s:388    .text:00000118 doCandle
+     /tmp/ccbOijoG.s:641    .bss:00000005 PWM_CTR
+     /tmp/ccbOijoG.s:631    .bss:00000003 PWM_VAL
+     /tmp/ccbOijoG.s:636    .bss:00000004 FRAME_CTR
+     /tmp/ccbOijoG.s:621    .bss:00000001 RAND
+     /tmp/ccbOijoG.s:616    .bss:00000000 randflag
+     /tmp/ccbOijoG.s:626    .bss:00000002 NEXTBRIGHT
+     /tmp/ccbOijoG.s:501    .text:00000196 setup
+     /tmp/ccbOijoG.s:540    .text:000001a8 loop
+     /tmp/ccbOijoG.s:589    .text.startup:00000000 main
+
+UNDEFINED SYMBOLS
+i2c_init
+__do_copy_data
+__do_clear_bss
