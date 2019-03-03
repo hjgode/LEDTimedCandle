@@ -1,0 +1,35 @@
+# project name
+PRJ = LEDTimedCandle
+MCU=attiny13a
+F_CPU=1200000
+
+# executables
+AVRDUDE = avrdude -c $(PRG) -p $(MCU)
+OBJCOPY = avr-objcopy
+OBJDUMP = avr-objdump
+SIZE    = avr-size --format=avr --mcu=$(MCU)
+CC      = avr-gcc
+
+# generate list of objects
+CFILES    = $(filter %.c, $(SRC))
+EXTC     := $(foreach dir, $(EXT), $(wildcard $(dir)/*.c))
+CPPFILES  = $(filter %.cpp, $(SRC))
+EXTCPP   := $(foreach dir, $(EXT), $(wildcard $(dir)/*.cpp))
+OBJ       = $(CFILES:.c=.o) $(EXTC:.c=.o) $(CPPFILES:.cpp=.o) $(EXTCPP:.cpp=.o)
+
+INCLUDE=-I.
+LIBS := $(LIBS) -lgcc
+CFLAGS=-std=c99 -Wall -g -Os -mmcu=${MCU} -DF_CPU=${F_CPU} ${INCLUDE} ${LIBS}
+TARGET=LEDTimedCandle
+SRCS=LEDTimedCandle.c
+
+all:
+	${CC} ${CFLAGS} -o ${TARGET}.bin ${SRCS}
+	${OBJCOPY} -j .text -j .data -O ihex ${TARGET}.bin ${TARGET}.hex
+
+flash:
+	avrdude -p ${MCU} -c usbasp -U flash:w:${TARGET}.hex:i -F -P usb
+
+clean:
+	rm -f *.bin *.hex
+
