@@ -4,9 +4,9 @@
 //you may need to disable millis in packages/MicroCore/hardware/avr/1.0.4/cores/microcore/core_settings.h
 
 //default 9.6MHz / 8 = 1200000 or at 4.8MHz / 8 = 600000
-//use 1.2MHz then 150000
+//use 1.2MHz then 150000, 1200000L
 #ifndef F_CPU
-	#define F_CPU 1200000
+	#define F_CPU 1200000L
 #endif
 
 // ATtiny13 candle with long sleep mode, wake watchdog timer
@@ -65,7 +65,8 @@
 
 #ifdef USE_I2C
     #include "./i2c/i2c.h"
-#else
+#endif
+#ifdef USE_I2CMASTER
     #include "./i2cmaster/i2cmaster.h"
 #endif
 
@@ -83,11 +84,13 @@
 #define USE_HEART_BEAT_LED
 
 //for 8seconds 450 times will be one hour
+//but in real we have 113000Hz instead of 131072, the time drifts 3h51m for a day!
 //we have two intervals: on-time=4hours; off-time=20 hours
 volatile uint16_t sec8_counter=0;
 #ifndef MY_DEBUG
   //450x8 = 3600 seconds = 60 minutes
-  #define HOUR_INTERVAL 450
+  #define HOUR_INTERVAL 388
+  //450
   #define MAX_OFF_HOURS 20
   #define MAX_ON_HOURS 4
 #else
@@ -206,9 +209,10 @@ void goToSleep(void)
 void doCandle(void)
 {
 if(F_CPU==150000){
-  _delay_us(1e6/440/16*8);
-}else{
-  _delay_us(1e6/440/16);   // Main clock=440*16 Hz
+  _delay_us(1e6/440/16);
+}
+if(F_CPU==1200000L){
+  _delay_us(1e6/440/16*8);   // Main clock=440*16 Hz
 }
   // PWM    
   PWM_CTR++;
@@ -278,7 +282,8 @@ void setup (void)
 //  MCUCR |= _BV(BODS) | _BV(BODSE);
 #ifdef USE_I2C
     I2C_Init(); //i2c.h
-#else
+#endif
+#ifdef USE_I2CMASTER
     i2c_init(); //i2cmasher.h
 #endif
 }  // end of setup
