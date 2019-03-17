@@ -1,0 +1,56 @@
+# Runtime corrections
+The circuit drifts several hours a day, bad.
+Why is that?
+
+# Theory of operation
+128KHz Oscillator is in real a 131072Hz oscillator (mixing k=1000 and k=1024!)
+Oscillator may run at 10% less. I.e. 8seconds maybe 8.8 seocnds in real.
+
+## Another approach
+Accuracy is bad but better at high frequency. For example:
+the 8seconds wdt may end up in 8216ms where the
+16ms timeout may end up in 16.2395µs
+
+error for 1 hour (3600seconds)
+450x8216ms=3697sec = 1hour 1minute and 37 seconds
+225000x16.2395µs = 3653.8875 = 1 Hour and 53 seconds
+
+#Theory
+wdt is counting 128kHz (131072Hz) cycles
+scaler=1024 => 1048576 cycles give 8 seconds
+scaler=128k =>  131072 cycles = 1 second
+
+seems the time shifts forward with 8sec at 128000 (which is not the 128kHz).
+Using 7 seconds instead of 8?
+
+#ATTiny13A Data sheet
+=113000Hz nominal at 2V/20°C
+
+1024k cycles are 1048576 cycles
+
+## Determine timeout
+113000 / 1048576 = 0.1077 => 9.285seconds
+131072 / 1048576 = 0.125 => 8seconds
+
+450*8=3600 (1hour) = 60 minuts
+450*9.285= 4178.27 = 69.63 minutes
+
+4h 60*4 =240 
+69.63*4 =278.55
+diff is 38.55 minutes! in 4 hours
+
+24h @ 8seconds = 1440
+    @ 9.285sec = 1671.12
+diff is 231 minutes for a day! this is 3.85 hours (3h51m) a day!
+
+## NEW
+Instead of theoratic 450 cycles of 8seconds for an hour:
+    60*60/9.285=387.72
+use 388 cycles.
+
+# References:
+8.4 Watchdog timer, page 38 
+->says 128kHz but means 131072 Hz (kilo for Hertz is 1000 and not 1024 normally)
+watchdog timer prescaler table 8-2, page 43
+Figure 19-65. 128 kHz Watchdog Oscillator Frequency vs. VCC, page 157
+->shows wdt frequency from 105000 to 115000, where is the 128kHz (131072Hz)?

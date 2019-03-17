@@ -175,7 +175,11 @@ void resetWatchdog (void)
   WDTCR = bit (WDCE) | bit (WDE) | bit (WDIF);
   // set interrupt mode and an interval (WDE must be changed from 1 to 0 here)
   ///WDTCR = bit (WDIE) | bit (WDP2) | bit (WDP1) | bit (WDP0);    // set WDIE, and 2 seconds delay
+#ifdef MY_DEBUG
+  WDTCR = bit (WDIE) | bit (WDP2) | bit (WDP1);    // set WDIE, and 1 seconds delay
+#else
   WDTCR = bit (WDIE) | bit (WDP3) | bit (WDP0);    // set WDIE, and 8 seconds delay
+#endif
   // pat the dog
   wdt_reset();  
 }  // end of resetWatchdog
